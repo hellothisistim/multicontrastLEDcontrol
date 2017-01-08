@@ -10,30 +10,7 @@
  A4 to SDA
  VIN to PWR
  GND to GND
- 
- Rotary encoder:
- red to D2
- green to D3
- black to ground
- 
- This encoder apparently works by momentarily grounding the green wire for a clockwise 
- click, and momentarily grounding the red wire for a counter-clockwise click. It is 
- also useful to connect red and green to ground with a 0.1uf capacitor.
- 
- Pushbutton switches:
- Green  (separate red wire) D7
- UV     (red wire)          D8
- Power  (green wire)        D9 
- Start  (yellow wire)       D10
- common (black wire) to ground
- 
- LEDs associated with pushbutton switches:
- A0 to A3
- 
- PWM lines for controlling LED power:
- G to D9
- UV1 to D10
- UV2 to D11
+
  
  
  */
@@ -41,8 +18,19 @@
 #include <Wire.h>
 
 const int DISPLAY_ADDRESS1 = 0x71; //This is the default address of the OpenSegment with both solder jumpers open
-const int ROTARY_A = 2;
-const int ROTARY_B = 3;
+
+const unsigned long ONE_SECOND = 1000;
+
+
+/* 
+Rotary encoder:
+ This encoder apparently works by momentarily grounding the green wire for a clockwise 
+ click, and momentarily grounding the red wire for a counter-clockwise click. It is 
+ also useful to connect red and green to ground with a 0.1uf capacitor.
+ */
+// black wire to ground
+const int ROTARY_A = 2; // green wire
+const int ROTARY_B = 3; // red wire
 const int ROTARY_DEBOUNCE_DELAY = 30;   // in millis
 const int SWITCH_DEBOUNCE_DELAY = 200;  // in millis
 volatile unsigned long lastUpdate = millis();
@@ -54,10 +42,13 @@ int uvPower = 255;
 const unsigned long BLINK_INTERVAL = 125;
 boolean blinkOn = false;
 unsigned long previousBlinkMillis = millis();
-const int GREEN_BUTTON = 4;
-const int UV_BUTTON = 5;
-const int POWER_BUTTON = 6;
-const int START_BUTTON = 7;
+
+//Pushbutton switches:
+const int GREEN_BUTTON = 4;  // red wire
+const int UV_BUTTON = 7;     // green wire
+const int POWER_BUTTON = 8;  // yellow wire
+const int START_BUTTON = 12; // separate red wire
+// LEDs associated with pushbutton switches: A0 to A3
 boolean greenButtonState = true; // pullup resistor is on
 boolean uvButtonState = true; // pullup resistor is on
 boolean powerButtonState = true; // pullup resistor is on
@@ -68,13 +59,23 @@ LEDMode greenButtonLedState = BLINK;
 LEDMode uvButtonLedState = OFF;
 LEDMode powerButtonLedState = OFF;
 LEDMode startButtonLedState = ON;
-String talk = String("1234");
+
+// PWM lines for controlling LED power:
+int greenLedControl = 0; // red wire
+int uv1LedControl = 0;   // green wire
+int uv2LedControl = 0;   // yellow wire
+
+String talk = String("upup");
 String oldTalk = talk;
 enum State { 
   GREEN, GREEN_SET_TIME, GREEN_SET_POWER, 
   UV, UV_SET_TIME, UV_SET_POWER, RUN_GREEN, RUN_UV };
 State timerMode = GREEN;
-
+enum Adjust { INCREMENT, DECREMENT, NO_CHANGE };
+Adjust adjust = NO_CHANGE;
+int greenTime = 0;
+int uvTime = 0;
+unsigned long timerFinishedMillis = millis();
 
 void setup() 
 {
@@ -87,9 +88,6 @@ void setup()
   Wire.write('v');
   Wire.endTransmission();
 
-  talk = "upup";
-  oldTalk = talk;
-
   pinMode(ROTARY_A, INPUT);
   pinMode(ROTARY_B, INPUT);
   digitalWrite(ROTARY_A, HIGH); // turn on pull-up resistor
@@ -97,7 +95,6 @@ void setup()
   attachInterrupt(0, rotaryChange, FALLING);
   attachInterrupt(1, rotaryChange, FALLING);
 
-  i2cSendString(talk); //Send the four characters to the display
 
   // Set up buttons
   pinMode(GREEN_BUTTON, INPUT_PULLUP);
@@ -119,22 +116,102 @@ void setup()
 void loop() 
 {
 
+  buttonListen();
+  blinkenlights();
 
-  //Serial.println("Sample number"); //Just a debug statement
-  //delay(250);
-  //if (talk != oldTalk) {
-  //  i2cSendString(talk);
-  //  oldTalk = talk;
+  if ((timerMode == GREEN) || (timerMode == UV)) {
+    talk = String(counter);
+  }
 
-  talk = String(counter);
+  // Adjusting the time
+  if ((timerMode == GREEN_SET_TIME) || (timerMode == UV_SET_TIME)) {
+    switch (adjust) {
+      case INCREMENT:
+        counter ++;
+        adjust = NO_CHANGE;
+        break;
+      case DECREMENT:
+        counter --;
+        adjust = NO_CHANGE;
+        if (counter <0) {
+          counter = 0;
+        }
+    }
+    talk = String(counter);
+
+  }
+
+  // Adjusting the power
+  if ((timerMode == GREEN_SET_POWER) || (timerMode == UV_SET_POWER)) {
+    switch (adjust) {
+      case INCREMENT:
+        counter = ((counter + 1) * 2) - 1;
+        if (counter > 255) {
+          counter = 255;
+        }
+        adjust = NO_CHANGE;
+        break;
+      case DECREMENT:
+        counter = ((counter + 1) / 2) - 1 ;
+        if (counter < 1) {
+          counter = 1;
+        }
+        adjust = NO_CHANGE;
+        break;
+    }
+    // Translate 8-bit values to natural language
+    switch (counter) {
+      case 255 :
+        talk = String("FULL");
+        break;
+      case 127 :
+        talk = String("HALF");
+        break;
+      case 63 :
+        talk = String("4th");
+        break;
+      case 31 :
+        talk = String("8th");
+        break;
+      case 15 :
+        talk = String("16th");
+        break;
+      case 7 :
+        talk = String("32nd");
+        break;
+      case 3 :
+        talk = String("64th");
+        break;
+      case 1 :
+        talk = String("128t");
+        break;
+
+    }
+  }
+
+  // Running the timer
+  if ((timerMode == RUN_GREEN) || (timerMode == RUN_UV)) {
+    counter = (timerFinishedMillis - millis()) / 1000;
+    talk = String(counter);
+    if (millis() >= timerFinishedMillis) {
+      if (timerMode == RUN_GREEN) {
+        timerMode = GREEN;
+        counter = greenTime;
+      } else {
+        timerMode = UV;
+        counter = uvTime;
+      }
+    }
+
+  }
+
+
   if (talk != oldTalk){
     i2cSendString(talk);
     oldTalk = talk;
   }
 
-  buttonListen();
-  blinkenlights();
-
+  //checkButtons();
 
 }
 
@@ -159,14 +236,12 @@ void buttonListen() {
         break;
       case GREEN_SET_TIME:
         timerMode = GREEN;
+         greenTime = counter;
         Serial.println("timerMode set to GREEN");
-        break;
-      case GREEN_SET_POWER:
-        timerMode = GREEN;
-        Serial.println("timerMode set to GREEN_SET_POWER");
         break;
       case UV:
         timerMode = GREEN;
+        counter = greenTime;
         Serial.println("timerMode set to GREEN");
         break;
       }
@@ -186,14 +261,12 @@ void buttonListen() {
         break;
       case UV_SET_TIME:
         timerMode = UV;
-        Serial.println("timerMode set to UV");
-        break;
-      case UV_SET_POWER:
-        timerMode = UV;
+        uvTime = counter;
         Serial.println("timerMode set to UV");
         break;
       case GREEN:
         timerMode = UV;
+        counter = uvTime;
         Serial.println("timerMode set to UV");
         break;
       }
@@ -209,18 +282,24 @@ void buttonListen() {
       switch (timerMode) {
       case GREEN:
         timerMode = GREEN_SET_POWER;
+        counter = greenPower;
         Serial.println("timerMode set to GREEN_SET_POWER");
         break;
       case UV:
         timerMode = UV_SET_POWER;
+        counter = uvPower;
         Serial.println("timerMode set to UV_SET_POWER");
         break;
       case GREEN_SET_POWER:
         timerMode = GREEN;
+        greenPower = counter;
+        counter = greenTime;
         Serial.println("timerMode set to GREEN");
         break;
       case UV_SET_POWER:
         timerMode = UV;
+        uvPower = counter;
+        counter = uvTime;
         Serial.println("timerMode set to UV");
         break;
       }
@@ -236,18 +315,22 @@ void buttonListen() {
       switch (timerMode) {
       case GREEN:
         timerMode = RUN_GREEN;
+        timerFinishedMillis = millis() + (greenTime * ONE_SECOND);
         Serial.println("timerMode set to RUN_GREEN");
         break;
       case UV:
         timerMode = RUN_UV;
+        timerFinishedMillis = millis() + (uvTime * ONE_SECOND);
         Serial.println("timerMode set to RUN_UV");
         break;
       case RUN_GREEN:
         timerMode = GREEN;
+        counter = greenTime;
         Serial.println("timerMode set to GREEN");
         break;
       case RUN_UV:
         timerMode = UV;
+        counter = uvTime;
         Serial.println("timerMode set to UV");
         break;
       }
@@ -258,8 +341,7 @@ void buttonListen() {
 
 void blinkenlights() {
   // Handles any on-off switching or blinking required of the button lights
-
-    switch (timerMode) {
+  switch (timerMode) {
   case GREEN:
     greenButtonLedState = ON;
     uvButtonLedState = OFF;
@@ -300,13 +382,13 @@ void blinkenlights() {
     greenButtonLedState = ON;
     uvButtonLedState = OFF;
     powerButtonLedState = OFF;
-    startButtonLedState = BLINK;
+    startButtonLedState = ON;
     break;
   case RUN_UV:
     greenButtonLedState = OFF;
     uvButtonLedState = ON;
     powerButtonLedState = OFF;
-    startButtonLedState = BLINK;
+    startButtonLedState = ON;
     break;
   }
 
@@ -381,12 +463,12 @@ void rotaryChange(){
     if (digitalRead(ROTARY_A) && !digitalRead(ROTARY_B)) {
       // increment
       lastUpdate = millis();
-      counter ++;
+      adjust = INCREMENT;
     } 
     else if (!digitalRead(ROTARY_A) && digitalRead(ROTARY_B)) {
       // decrement
       lastUpdate = millis();
-      counter --;
+      adjust = DECREMENT;
     }
   }
 }
@@ -406,15 +488,34 @@ void i2cSendString(String toSend)
 }
 
 
-
-
-
-
-
-
-
-
-
+void checkButtons() {
+  Serial.print("buttons: ");
+  if (digitalRead(GREEN_BUTTON) == LOW) {
+    Serial.print("G");
+  } 
+  else {
+    Serial.print("g");
+  }
+  if (digitalRead(UV_BUTTON) == LOW) {
+    Serial.print("U");
+  } 
+  else {
+    Serial.print("u");
+  }
+  if (digitalRead(POWER_BUTTON) == LOW) {
+    Serial.print("P");
+  } 
+  else {
+    Serial.print("p");
+  }
+  if (digitalRead(START_BUTTON) == LOW) {
+    Serial.print("S");
+  } 
+  else {
+    Serial.print("s");
+  }
+  Serial.println();
+}
 
 
 
