@@ -21,8 +21,8 @@ Where to start? I have recently rekindled my interest in chemical-based photogra
 - 1x Arduino shield
 - 1x [Rotary Encoder](https://www.sparkfun.com/products/10982)
 - 1x [SparkFun 7-Segment Serial Display - Red](https://www.sparkfun.com/products/11441)
-- 4x surplus switch and an LED assembly 
-- 1x 8x16-inch sheet steel
+- 4x surplus switch-and-an-LED assembly 
+- 1x 8x14-inch sheet steel
 - Wooden/cardboard structure
 - Various screws/nuts/bolts
 - 4-conductor phone wire
